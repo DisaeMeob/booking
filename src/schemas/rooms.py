@@ -1,0 +1,53 @@
+from pydantic import BaseModel, ConfigDict
+
+from src.schemas.facilities import Facility
+
+
+class RoomsAdd(BaseModel):
+    hotel_id: int
+    title: str
+    description: str | None = None
+    price: int
+    quantity: int
+
+
+class RoomsAddWithoutFac(BaseModel):
+    hotel_id: int
+    title: str
+    description: str | None = None
+    price: int
+    quantity: int
+
+
+class RoomsAddRequest(BaseModel):
+    title: str
+    description: str | None = None
+    price: int
+    quantity: int
+    facilities_ids: list[int] = []
+
+
+class Room(RoomsAdd):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RoomWithRel(Room):
+    facilities: list[Facility]
+
+
+class RoomPatch(BaseModel):
+    hotel_id: int | None = None
+    title: str | None = None
+    description: str | None = None
+    price: int | None = None
+    quantity: int | None = None
+
+
+class RoomPatchRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    price: int | None = None
+    quantity: int | None = None
+    facilities_ids: list[int] = []
