@@ -20,7 +20,7 @@ async def login_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Пользователь c таким email не зарегистрирован')
     if not AuthService().verify_password(data.password, user.hashed_password):
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Неправильный email или пароль')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Неправильный email или пароль')
     access_token = AuthService().create_access_token({"user_id": user.id})
     response.set_cookie("access_token", access_token)
     return {"access_token": access_token}
@@ -38,7 +38,7 @@ async def register_user(
     try:
         await db.users.add(new_user_data)
     except Exception:
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Юзер уже зарегистрирован')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Юзер уже зарегистрирован')
 
     return {"status": "OK"}
 
