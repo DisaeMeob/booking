@@ -6,14 +6,23 @@ from config import settings
 from database import async_session_maker_null_pool
 from schemas.hotels import HotelAdd
 from schemas.rooms import RoomsAdd
+from src.api.dependencies import get_db
 from src.database import Base, engine_null_pool
 from src.main import app
 from src.models import *
 from utils.db_manager import DBManager
 
+
 @pytest.fixture(scope="session", autouse=True)
 async def setup_database():
     assert settings.MODE == "TEST"
+
+
+async def get_db_null_pool():
+    async with DBManager(session_factory=async_session_maker_null_pool) as db:
+        yield db
+
+app.dependency_overrides[get_db] = get_db_null_pool
 
 
 @pytest.fixture(scope="function")
