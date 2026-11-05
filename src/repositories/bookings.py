@@ -63,3 +63,37 @@ class BookingsRepository(BaseRepository):
             date_to=booking_data.date_to,
         )
         return await self.add(booking_to_add)
+
+    async def get_peak_occupancy(self, room_id: int) -> int:
+        query = (
+            select(BookingsOrm.date_from, BookingsOrm.date_to)
+            .filter(
+                BookingsOrm.room_id == room_id,
+                BookingsOrm.date_to > date.today(),
+            )
+        )
+        res = await self.session.execute(query)
+        booking_intervals = res.all()
+
+        if not booking_intervals:
+            return 0
+
+        # Формируем события:
+        # выезд: priority = 0 (обрабатывается первым при совпадении дат)
+        # заезд: priority = 1
+        events: list[tuple[date, int, int]] = []
+        for date_from, date_to in booking_intervals:
+            events.append((date_to, -1, 0))
+            events.append((date_from, 1, 1))
+
+        # Сортируем: сначала по дате, затем по priority (выезд перед заездом)
+        events.sort(key=lambda x: (x[0], x[2]))
+
+        peak_occupancy = 0
+        current_active = 0
+        for _, change, _ in events:
+            current_active += change
+            if current_active > peak_occupancy:
+                peak_occupancy = current_active
+
+        return peak_occupancy

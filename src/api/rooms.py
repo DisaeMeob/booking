@@ -82,12 +82,21 @@ async def delete_rooms(db: DBDep, hotel_id:int,  room_id: int = Path()):
 
 @router.put('/{hotel_id}/rooms/{room_id}', summary="Полное изменение номера")
 async def edit_room(db: DBDep, hotel_id: int, room_id:int,  room_data: RoomsAddRequest):
-    room = await db.rooms.get_one_or_none(hotel_id=hotel_id, id=room_id)
+    room = await db.rooms.get_one_or_none(hotel_id=hotel_id, id=room_id, with_for_update=True)
     if room is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found"
         )
+
+    if room_data.quantity < room.quantity:
+        peak_occupancy = await db.bookings.get_peak_occupancy(room_id=room_id)
+        if room_data.quantity < peak_occupancy:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Невозможно уменьшить количество номеров до {room_data.quantity}: "
+                       f"на выбранные даты уже существует {peak_occupancy} активных бронирований",
+            )
 
     _room_data = RoomsAdd(hotel_id=hotel_id, **room_data.model_dump(exclude={"facilities_ids"}))
     await db.rooms.edit(_room_data, id=room_id, hotel_id=hotel_id)
@@ -107,21 +116,44 @@ async def patch_rooms(
     room_id: int,
     room_data: RoomPatchRequest,
 ):
-    room = await db.rooms.get_one_or_none(hotel_id=hotel_id, id=room_id)
+    _raw_fields_dict = room_data.model_dump(exclude_unset=True)
+
+    if "quantity" in _raw_fields_dict and _raw_fields_dict["quantity"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Количество номеров (quantity) не может быть null",
+        )
+
+    quantity_is_present = "quantity" in _raw_fields_dict
+
+    room = await db.rooms.get_one_or_none(
+        hotel_id=hotel_id,
+        id=room_id,
+        with_for_update=quantity_is_present,
+    )
     if room is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found"
         )
 
-    _room_data_dict = room_data.model_dump(exclude_unset=True)
+    if quantity_is_present and _raw_fields_dict["quantity"] < room.quantity:
+        new_quantity = _raw_fields_dict["quantity"]
+        peak_occupancy = await db.bookings.get_peak_occupancy(room_id=room_id)
+        if new_quantity < peak_occupancy:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Невозможно уменьшить количество номеров до {new_quantity}: "
+                       f"на выбранные даты уже существует {peak_occupancy} активных бронирований",
+            )
+
     _room_fields_dict = room_data.model_dump(exclude_unset=True, exclude={"facilities_ids"})
     if _room_fields_dict:
         _room_data = RoomPatch(hotel_id=hotel_id, **_room_fields_dict)
         await db.rooms.edit(data=_room_data, exclude_unset=True, id=room_id, hotel_id=hotel_id)
 
-    if "facilities_ids" in _room_data_dict:
-        await db.room_facility.set_room_facilities(room_id, facilities_ids=_room_data_dict["facilities_ids"])
+    if "facilities_ids" in _raw_fields_dict:
+        await db.room_facility.set_room_facilities(room_id, facilities_ids=_raw_fields_dict["facilities_ids"])
 
     await db.commit()
     return {'status': 'ok'}

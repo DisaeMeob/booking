@@ -24,12 +24,15 @@ class RoomsRepository(BaseRepository):
 
         return [RoomDataWithRelMapper.map_to_domain_entity(model) for model in result.unique().scalars().all()]
 
-    async def get_one_or_none(self, **filter_by):
+    async def get_one_or_none(self, with_for_update: bool = False, **filter_by):
         query = (
             select(self.model)
             .options(joinedload(self.model.facilities))
             .filter_by(**filter_by)
         )
+        if with_for_update:
+            query = query.with_for_update(of=self.model)
+
         result = await self.session.execute(query)
         model = result.unique().scalars().one_or_none()
 
