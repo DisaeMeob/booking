@@ -36,24 +36,20 @@ class BaseRepository:
     async def add(self, data: BaseModel):
         stmt = insert(self.model).values(**data.model_dump()).returning(self.model)
         result = await self.session.execute(stmt)
-        await self.session.commit()
         model = result.scalars().one()
 
         return self.mapper.map_to_domain_entity(model)
 
     async def add_bulk(self, data: list[BaseModel]):
-        values = [item.model_dump() for item in data]
-
         stmt = insert(self.model).values([item.model_dump() for item in data])
         await self.session.execute(stmt)
-        await self.session.commit()
 
 
     async def edit(self, data: BaseModel, exclude_unset: bool = False, **filter_by) -> None:
         update_stmt = (
             update(self.model)
             .filter_by(**filter_by)
-            .values(**data.model_dump(exclude_unset=True))
+            .values(**data.model_dump(exclude_unset=exclude_unset))
         )
         await self.session.execute(update_stmt)
 
