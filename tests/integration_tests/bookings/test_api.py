@@ -306,3 +306,96 @@ async def test_concurrent_booking_last_room(ac: AsyncClient, db: DBManager):
             await db.bookings.delete(id=b_id)
         await db.rooms.delete(id=temp_room.id)
         await db.commit()
+
+
+async def test_get_all_bookings_returns_405_method_not_allowed(ac: AsyncClient):
+    response = await ac.get("/bookings")
+    assert response.status_code == 405
+
+
+async def test_get_my_bookings_unauthorized_returns_401(ac: AsyncClient):
+    # Очищаем cookies перед запросом
+    ac.cookies.clear()
+    response = await ac.get("/bookings/me")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Вы не предоставили токен доступа"
+
+
+async def test_get_my_bookings_returns_only_current_user_bookings(ac: AsyncClient, db: DBManager):
+    from src.schemas.bookings import BookingsAdd
+    from src.services.auth import AuthService
+    from src.schemas.users import UserAdd
+
+    other_user_id: int | None = None
+    other_booking_id: int | None = None
+    my_booking_id: int | None = None
+
+    try:
+        # 1. Создаём второго пользователя напрямую через БД
+        other_user = await db.users.add(
+            UserAdd(
+                email="other_user@pes.com",
+                hashed_password=AuthService().hash_password("secret123"),
+            )
+        )
+        other_user_id = other_user.id
+
+        # Создаём чужое бронирование для other_user
+        other_booking = await db.bookings.add(
+            BookingsAdd(
+                user_id=other_user.id,
+                room_id=1,
+                price=24500,
+                date_from="2027-12-01",
+                date_to="2027-12-05",
+            )
+        )
+        other_booking_id = other_booking.id
+        await db.commit()
+
+        # 2. Логинимся под основным пользователем kot@pes.com
+        ac.cookies.clear()
+        login_response = await ac.post(
+            "/auth/login",
+            json={"email": "kot@pes.com", "password": "12345678"},
+        )
+        assert login_response.status_code == 200
+
+        # 3. Создаём бронирование от лица kot@pes.com через API
+        my_booking_res = await ac.post(
+            "/bookings",
+            json={
+                "room_id": 1,
+                "date_from": "2027-11-20",
+                "date_to": "2027-11-25",
+            },
+        )
+        assert my_booking_res.status_code == 200
+        my_booking_id = my_booking_res.json()["data"]["id"]
+
+        # 4. Запрашиваем свои бронирования
+        res = await ac.get("/bookings/me")
+        assert res.status_code == 200
+        my_bookings_data = res.json()["data"]
+
+        # Проверяем, что в списке есть наше бронирование
+        my_booking_ids = [b["id"] for b in my_bookings_data]
+        assert my_booking_id in my_booking_ids
+
+        # Проверяем, что чужого бронирования НЕТ в списке
+        assert other_booking_id not in my_booking_ids
+
+        # Все возвращённые брони принадлежат kot@pes.com
+        user_me_res = await ac.get("/auth/me")
+        assert user_me_res.status_code == 200
+        current_user_id = user_me_res.json()["id"]
+        assert all(b["user_id"] == current_user_id for b in my_bookings_data)
+    finally:
+        # Удаляем только успешно созданные записи: сначала бронирования, затем пользователя
+        if my_booking_id is not None:
+            await db.bookings.delete(id=my_booking_id)
+        if other_booking_id is not None:
+            await db.bookings.delete(id=other_booking_id)
+        if other_user_id is not None:
+            await db.users.delete(id=other_user_id)
+        await db.commit()
