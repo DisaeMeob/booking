@@ -10,6 +10,9 @@ class BookingAddRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_dates(self) -> Self:
+        today = date.today()
+        if self.date_from < today:
+            raise ValueError("Дата заезда не может быть в прошлом")
         if self.date_from >= self.date_to:
             raise ValueError("Дата заезда должна быть строго раньше даты выезда")
         return self

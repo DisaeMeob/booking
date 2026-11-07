@@ -399,3 +399,84 @@ async def test_get_my_bookings_returns_only_current_user_bookings(ac: AsyncClien
         if other_user_id is not None:
             await db.users.delete(id=other_user_id)
         await db.commit()
+
+
+async def test_add_booking_date_from_in_past_returns_422(ac: AsyncClient):
+    from datetime import date, timedelta
+
+    login_response = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_response.status_code == 200
+
+    past_date_from = (date.today() - timedelta(days=1)).isoformat()
+    future_date_to = (date.today() + timedelta(days=2)).isoformat()
+
+    response = await ac.post(
+        "/bookings",
+        json={
+            "room_id": 1,
+            "date_from": past_date_from,
+            "date_to": future_date_to,
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_add_booking_both_dates_in_past_returns_422(ac: AsyncClient):
+    from datetime import date, timedelta
+
+    login_response = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_response.status_code == 200
+
+    past_date_from = (date.today() - timedelta(days=5)).isoformat()
+    past_date_to = (date.today() - timedelta(days=1)).isoformat()
+
+    response = await ac.post(
+        "/bookings",
+        json={
+            "room_id": 1,
+            "date_from": past_date_from,
+            "date_to": past_date_to,
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_add_booking_date_from_today_success(ac: AsyncClient, db: DBManager):
+    from datetime import date, timedelta
+
+    login_response = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_response.status_code == 200
+
+    today = date.today()
+    today_date_from = today.isoformat()
+    future_date_to = (today + timedelta(days=2)).isoformat()
+
+    booking_id: int | None = None
+    try:
+        response = await ac.post(
+            "/bookings",
+            json={
+                "room_id": 1,
+                "date_from": today_date_from,
+                "date_to": future_date_to,
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        booking_id = data["id"]
+        assert data["room_id"] == 1
+        assert data["date_from"] == today_date_from
+        assert data["date_to"] == future_date_to
+    finally:
+        if booking_id is not None:
+            await db.bookings.delete(id=booking_id)
+            await db.commit()
