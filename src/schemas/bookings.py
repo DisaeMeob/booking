@@ -26,5 +26,6 @@ class BookingsAdd(BaseModel):
 
 class Booking(BookingsAdd):
     id: int
+    total_cost: int
 
     model_config = ConfigDict(from_attributes=True)

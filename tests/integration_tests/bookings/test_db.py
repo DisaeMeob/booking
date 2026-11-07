@@ -22,6 +22,9 @@ async def test_booking_crud(db: DBManager):
     assert booking.id == new_booking.id
     assert booking.room_id == new_booking.room_id
     assert booking.user_id == new_booking.user_id
+    expected_initial_cost = booking_data.price * (booking_data.date_to - booking_data.date_from).days
+    assert new_booking.total_cost == expected_initial_cost
+    assert booking.total_cost == expected_initial_cost
 
     updated_date = date(year=2027, month=1, day=10)
     update_booking_date = BookingsAdd(
@@ -37,6 +40,8 @@ async def test_booking_crud(db: DBManager):
     assert updated_booking
     assert updated_booking.date_to == updated_date
     assert updated_booking.price == 5000
+    expected_updated_cost = update_booking_date.price * (update_booking_date.date_to - update_booking_date.date_from).days
+    assert updated_booking.total_cost == expected_updated_cost
 
     await db.bookings.delete(id=new_booking.id)
     await db.commit()

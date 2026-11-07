@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date, timedelta
 from httpx import AsyncClient
 from src.schemas.rooms import RoomsAdd
 from src.utils.db_manager import DBManager
@@ -11,12 +12,17 @@ async def test_add_booking_valid_dates(ac: AsyncClient, db: DBManager):
     )
     assert login_response.status_code == 200
 
+    today = date.today()
+    date_from = (today + timedelta(days=3)).isoformat()
+    date_to = (today + timedelta(days=8)).isoformat()
+    expected_days = (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days
+
     response = await ac.post(
         "/bookings",
         json={
             "room_id": 1,
-            "date_from": "2026-11-10",
-            "date_to": "2026-11-15",
+            "date_from": date_from,
+            "date_to": date_to,
         },
     )
 
@@ -26,8 +32,10 @@ async def test_add_booking_valid_dates(ac: AsyncClient, db: DBManager):
 
     try:
         assert data["room_id"] == 1
-        assert data["date_from"] == "2026-11-10"
-        assert data["date_to"] == "2026-11-15"
+        assert data["date_from"] == date_from
+        assert data["date_to"] == date_to
+        assert "total_cost" in data
+        assert data["total_cost"] == data["price"] * expected_days
     finally:
         await db.bookings.delete(id=booking_id)
         await db.commit()
@@ -385,11 +393,17 @@ async def test_get_my_bookings_returns_only_current_user_bookings(ac: AsyncClien
         # Проверяем, что чужого бронирования НЕТ в списке
         assert other_booking_id not in my_booking_ids
 
-        # Все возвращённые брони принадлежат kot@pes.com
+        # Все возвращённые брони принадлежат kot@pes.com и содержат корректный total_cost
         user_me_res = await ac.get("/auth/me")
         assert user_me_res.status_code == 200
         current_user_id = user_me_res.json()["id"]
         assert all(b["user_id"] == current_user_id for b in my_bookings_data)
+
+        from datetime import date
+        for b in my_bookings_data:
+            assert "total_cost" in b
+            b_days = (date.fromisoformat(b["date_to"]) - date.fromisoformat(b["date_from"])).days
+            assert b["total_cost"] == b["price"] * b_days
     finally:
         # Удаляем только успешно созданные записи: сначала бронирования, затем пользователя
         if my_booking_id is not None:
@@ -480,3 +494,67 @@ async def test_add_booking_date_from_today_success(ac: AsyncClient, db: DBManage
         if booking_id is not None:
             await db.bookings.delete(id=booking_id)
             await db.commit()
+
+
+async def test_booking_total_cost_calculation(ac: AsyncClient, db: DBManager):
+    from datetime import date, timedelta
+
+    login_response = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_response.status_code == 200
+
+    today = date.today()
+
+    # 1. Проверяем проживание на 1 ночь
+    d_from_1 = (today + timedelta(days=20)).isoformat()
+    d_to_1 = (today + timedelta(days=21)).isoformat()
+    expected_days_1 = (date.fromisoformat(d_to_1) - date.fromisoformat(d_from_1)).days
+    assert expected_days_1 == 1
+
+    # 2. Проверяем проживание на несколько ночей (например, 4 ночи)
+    d_from_4 = (today + timedelta(days=25)).isoformat()
+    d_to_4 = (today + timedelta(days=29)).isoformat()
+    expected_days_4 = (date.fromisoformat(d_to_4) - date.fromisoformat(d_from_4)).days
+    assert expected_days_4 == 4
+
+    b1_id: int | None = None
+    b2_id: int | None = None
+
+    try:
+        # Запрос на 1 ночь
+        res1 = await ac.post(
+            "/bookings",
+            json={
+                "room_id": 1,
+                "date_from": d_from_1,
+                "date_to": d_to_1,
+            },
+        )
+        assert res1.status_code == 200
+        data1 = res1.json()["data"]
+        b1_id = data1["id"]
+        assert "total_cost" in data1
+        assert data1["total_cost"] == data1["price"] * expected_days_1
+
+        # Запрос на несколько ночей
+        res2 = await ac.post(
+            "/bookings",
+            json={
+                "room_id": 1,
+                "date_from": d_from_4,
+                "date_to": d_to_4,
+            },
+        )
+        assert res2.status_code == 200
+        data2 = res2.json()["data"]
+        b2_id = data2["id"]
+        assert "total_cost" in data2
+        assert data2["total_cost"] == data2["price"] * expected_days_4
+    finally:
+        if b1_id is not None:
+            await db.bookings.delete(id=b1_id)
+        if b2_id is not None:
+            await db.bookings.delete(id=b2_id)
+        await db.commit()
