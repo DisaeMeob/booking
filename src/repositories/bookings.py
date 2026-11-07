@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from datetime import date
 
 from src.models.bookings import BookingsOrm
@@ -97,3 +97,13 @@ class BookingsRepository(BaseRepository):
                 peak_occupancy = current_active
 
         return peak_occupancy
+
+    async def delete_user_booking(self, booking_id: int, user_id: int) -> bool:
+        stmt = (
+            delete(BookingsOrm)
+            .filter_by(id=booking_id, user_id=user_id)
+            .returning(BookingsOrm.id)
+        )
+        res = await self.session.execute(stmt)
+        deleted_id = res.scalar_one_or_none()
+        return deleted_id is not None

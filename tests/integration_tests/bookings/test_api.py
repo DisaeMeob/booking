@@ -558,3 +558,206 @@ async def test_booking_total_cost_calculation(ac: AsyncClient, db: DBManager):
         if b2_id is not None:
             await db.bookings.delete(id=b2_id)
         await db.commit()
+
+
+async def test_delete_user_booking_success(ac: AsyncClient, db: DBManager):
+    login_response = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_response.status_code == 200
+
+    today = date.today()
+    date_from = (today + timedelta(days=35)).isoformat()
+    date_to = (today + timedelta(days=40)).isoformat()
+
+    booking_id: int | None = None
+    try:
+        # Создаём бронирование
+        create_res = await ac.post(
+            "/bookings",
+            json={
+                "room_id": 1,
+                "date_from": date_from,
+                "date_to": date_to,
+            },
+        )
+        assert create_res.status_code == 200
+        booking_id = create_res.json()["data"]["id"]
+
+        # Успешно удаляем собственное бронирование
+        del_res = await ac.delete(f"/bookings/{booking_id}")
+        assert del_res.status_code == 200
+        assert del_res.json() == {"status": "Ok"}
+
+        # Проверяем, что в списке бронирований его больше нет
+        my_bookings_res = await ac.get("/bookings/me")
+        assert my_bookings_res.status_code == 200
+        my_booking_ids = [b["id"] for b in my_bookings_res.json()["data"]]
+        assert booking_id not in my_booking_ids
+        booking_id = None
+    finally:
+        if booking_id is not None:
+            await db.bookings.delete(id=booking_id)
+            await db.commit()
+
+
+async def test_delete_other_user_booking_returns_404(ac: AsyncClient, db: DBManager):
+    from src.schemas.bookings import BookingsAdd
+    from src.services.auth import AuthService
+    from src.schemas.users import UserAdd
+
+    other_user_id: int | None = None
+    other_booking_id: int | None = None
+
+    try:
+        # Создаём чужого пользователя и его бронирование
+        other_user = await db.users.add(
+            UserAdd(
+                email="victim_user@pes.com",
+                hashed_password=AuthService().hash_password("secret123"),
+            )
+        )
+        other_user_id = other_user.id
+
+        today = date.today()
+        other_booking = await db.bookings.add(
+            BookingsAdd(
+                user_id=other_user.id,
+                room_id=1,
+                price=24500,
+                date_from=today + timedelta(days=45),
+                date_to=today + timedelta(days=50),
+            )
+        )
+        other_booking_id = other_booking.id
+        await db.commit()
+
+        # Логинимся под обычным пользователем kot@pes.com
+        ac.cookies.clear()
+        login_res = await ac.post(
+            "/auth/login",
+            json={"email": "kot@pes.com", "password": "12345678"},
+        )
+        assert login_res.status_code == 200
+
+        # Пытаемся удалить чужое бронирование
+        del_res = await ac.delete(f"/bookings/{other_booking_id}")
+        assert del_res.status_code == 404
+        assert del_res.json()["detail"] == "Бронирование не найдено"
+
+        # Проверяем, что чужая запись осталась в базе данных
+        existing_booking = await db.bookings.get_one_or_none(id=other_booking_id)
+        assert existing_booking is not None
+        assert existing_booking.id == other_booking_id
+    finally:
+        if other_booking_id is not None:
+            await db.bookings.delete(id=other_booking_id)
+        if other_user_id is not None:
+            await db.users.delete(id=other_user_id)
+        await db.commit()
+
+
+async def test_delete_booking_not_found(ac: AsyncClient):
+    login_res = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_res.status_code == 200
+
+    del_res = await ac.delete("/bookings/999999")
+    assert del_res.status_code == 404
+    assert del_res.json()["detail"] == "Бронирование не найдено"
+
+
+async def test_delete_booking_twice_returns_404(ac: AsyncClient, db: DBManager):
+    login_res = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_res.status_code == 200
+
+    today = date.today()
+    date_from = (today + timedelta(days=55)).isoformat()
+    date_to = (today + timedelta(days=60)).isoformat()
+
+    booking_id: int | None = None
+    try:
+        create_res = await ac.post(
+            "/bookings",
+            json={
+                "room_id": 1,
+                "date_from": date_from,
+                "date_to": date_to,
+            },
+        )
+        assert create_res.status_code == 200
+        booking_id = create_res.json()["data"]["id"]
+
+        # Первое удаление — 200 OK
+        del_res1 = await ac.delete(f"/bookings/{booking_id}")
+        assert del_res1.status_code == 200
+        assert del_res1.json() == {"status": "Ok"}
+
+        # Повторное удаление той же брони — 404 Not Found
+        del_res2 = await ac.delete(f"/bookings/{booking_id}")
+        assert del_res2.status_code == 404
+        assert del_res2.json()["detail"] == "Бронирование не найдено"
+        booking_id = None
+    finally:
+        if booking_id is not None:
+            await db.bookings.delete(id=booking_id)
+            await db.commit()
+
+
+async def test_delete_booking_frees_up_room_for_new_booking(ac: AsyncClient, db: DBManager):
+    login_res = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_res.status_code == 200
+
+    temp_room = await db.rooms.add(
+        RoomsAdd(
+            hotel_id=1,
+            title="Room for delete & rebook test",
+            description="desc",
+            price=7500,
+            quantity=1,
+        )
+    )
+    await db.commit()
+
+    today = date.today()
+    payload = {
+        "room_id": temp_room.id,
+        "date_from": (today + timedelta(days=65)).isoformat(),
+        "date_to": (today + timedelta(days=70)).isoformat(),
+    }
+
+    first_booking_id: int | None = None
+    second_booking_id: int | None = None
+
+    try:
+        res1 = await ac.post("/bookings", json=payload)
+        assert res1.status_code == 200
+        first_booking_id = res1.json()["data"]["id"]
+
+        res_conflict = await ac.post("/bookings", json=payload)
+        assert res_conflict.status_code == 409
+
+        del_res = await ac.delete(f"/bookings/{first_booking_id}")
+        assert del_res.status_code == 200
+        assert del_res.json() == {"status": "Ok"}
+        first_booking_id = None
+
+        res2 = await ac.post("/bookings", json=payload)
+        assert res2.status_code == 200
+        second_booking_id = res2.json()["data"]["id"]
+    finally:
+        if first_booking_id is not None:
+            await db.bookings.delete(id=first_booking_id)
+        if second_booking_id is not None:
+            await db.bookings.delete(id=second_booking_id)
+        await db.rooms.delete(id=temp_room.id)
+        await db.commit()

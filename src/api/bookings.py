@@ -33,3 +33,20 @@ async def add_booking(
 
     await db.commit()
     return {"status": "Ok", "data": booking}
+
+
+@router.delete("/{booking_id}", summary="Отмена бронирования")
+async def delete_booking(
+        booking_id: int,
+        user_id: UserIdDep,
+        db: DBDep,
+):
+    is_deleted = await db.bookings.delete_user_booking(booking_id=booking_id, user_id=user_id)
+    if not is_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Бронирование не найдено",
+        )
+
+    await db.commit()
+    return {"status": "Ok"}
