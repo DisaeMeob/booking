@@ -550,3 +550,508 @@ async def test_concurrent_booking_and_patch_quantity_preserves_invariant(ac: Asy
             await db.bookings.delete(id=b_id)
         await db.rooms.delete(id=room_id)
         await db.commit()
+
+
+async def test_delete_room_with_bookings_returns_409(ac: AsyncClient, db: DBManager):
+    login_response = await ac.post(
+        "/auth/login",
+        json={"email": "kot@pes.com", "password": "12345678"},
+    )
+    assert login_response.status_code == 200
+
+    create_res = await ac.post(
+        "/hotels/1/rooms",
+        json={
+            "title": "Room with booking for delete test",
+            "description": "desc",
+            "price": 5000,
+            "quantity": 1,
+            "facilities_ids": [],
+        },
+    )
+    assert create_res.status_code == 200
+    room_id = create_res.json()["data"]["id"]
+
+    booking_res = await ac.post(
+        "/bookings",
+        json={
+            "room_id": room_id,
+            "date_from": "2027-10-01",
+            "date_to": "2027-10-05",
+        },
+    )
+    assert booking_res.status_code == 200
+    booking_id = booking_res.json()["data"]["id"]
+
+    try:
+        del_res = await ac.delete(f"/hotels/1/rooms/{room_id}")
+        assert del_res.status_code == 409
+        assert del_res.json()["detail"] == "Cannot delete room with existing bookings"
+
+        # Номер и бронирование должны остаться в базе
+        get_room_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_room_res.status_code == 200
+    finally:
+        await db.bookings.delete(id=booking_id)
+        await db.rooms.delete(id=room_id)
+        await db.commit()
+
+
+async def test_delete_room_with_facilities_succeeds(ac: AsyncClient, db: DBManager):
+    facility = await db.facilities.add(
+        FacilityAdd(title="Facility for room deletion test")
+    )
+    await db.commit()
+
+    create_res = await ac.post(
+        "/hotels/1/rooms",
+        json={
+            "title": "Room with facility for delete test",
+            "description": "desc",
+            "price": 6000,
+            "quantity": 1,
+            "facilities_ids": [facility.id],
+        },
+    )
+    assert create_res.status_code == 200
+    room_id = create_res.json()["data"]["id"]
+
+    try:
+        del_res = await ac.delete(f"/hotels/1/rooms/{room_id}")
+        assert del_res.status_code == 200
+        assert del_res.json() == {"status": "ok"}
+
+        # Номер должен отсутствовать
+        get_room_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_room_res.status_code == 404
+
+        # Само удобство должно сохраниться
+        fac_in_db = await db.facilities.get_one_or_none(id=facility.id)
+        assert fac_in_db is not None
+    finally:
+        await db.facilities.delete(id=facility.id)
+        await db.commit()
+
+
+async def test_create_room_with_existing_facilities_succeeds(ac: AsyncClient, db: DBManager):
+    facility = None
+    room_id = None
+    try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for create success")
+        )
+        await db.commit()
+
+        response = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room with existing facility",
+                "description": "desc",
+                "price": 5000,
+                "quantity": 2,
+                "facilities_ids": [facility.id],
+            },
+        )
+        if response.status_code == 200:
+            room_id = response.json().get("data", {}).get("id")
+        assert response.status_code == 200
+        assert room_id is not None
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        fac_ids = [f["id"] for f in get_res.json()["facilities"]]
+        assert facility.id in fac_ids
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
+        await db.commit()
+
+
+async def test_create_room_with_nonexistent_facility_returns_400(ac: AsyncClient, db: DBManager):
+    room_id = None
+    try:
+        response = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room with bad facility",
+                "description": "desc",
+                "price": 5000,
+                "quantity": 2,
+                "facilities_ids": [99999, 99998],
+            },
+        )
+        if response.status_code == 200:
+            room_id = response.json().get("data", {}).get("id")
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Facilities with ids [99998, 99999] do not exist"
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+            await db.commit()
+
+
+async def test_create_room_with_nonexistent_facility_does_not_create_room(ac: AsyncClient, db: DBManager):
+    unique_title = "Never Created Room Title 12345"
+    room_id = None
+    try:
+        response = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": unique_title,
+                "description": "desc",
+                "price": 5000,
+                "quantity": 2,
+                "facilities_ids": [99999],
+            },
+        )
+        if response.status_code == 200:
+            room_id = response.json().get("data", {}).get("id")
+        assert response.status_code == 400
+        room_in_db = await db.rooms.get_one_or_none(title=unique_title)
+        assert room_in_db is None
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+            await db.commit()
+
+
+async def test_edit_room_with_nonexistent_facility_returns_400(ac: AsyncClient, db: DBManager):
+    room_id = None
+    try:
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room for edit 400 test",
+                "description": "desc",
+                "price": 5000,
+                "quantity": 2,
+                "facilities_ids": [],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
+        response = await ac.put(
+            f"/hotels/1/rooms/{room_id}",
+            json={
+                "title": "Updated Room Title",
+                "description": "desc",
+                "price": 5500,
+                "quantity": 2,
+                "facilities_ids": [99999],
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Facilities with ids [99999] do not exist"
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+            await db.commit()
+
+
+async def test_edit_room_with_nonexistent_facility_does_not_modify_room_or_facilities(ac: AsyncClient, db: DBManager):
+    facility = None
+    room_id = None
+    try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for edit immutability test")
+        )
+        await db.commit()
+
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Initial Room Title Before PUT",
+                "description": "initial desc",
+                "price": 4000,
+                "quantity": 2,
+                "facilities_ids": [facility.id],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
+        response = await ac.put(
+            f"/hotels/1/rooms/{room_id}",
+            json={
+                "title": "Attempted New Title",
+                "description": "new desc",
+                "price": 9999,
+                "quantity": 2,
+                "facilities_ids": [facility.id, 99999],
+            },
+        )
+        assert response.status_code == 400
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        room_data = get_res.json()
+        assert room_data["title"] == "Initial Room Title Before PUT"
+        assert room_data["price"] == 4000
+        assert [f["id"] for f in room_data["facilities"]] == [facility.id]
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
+        await db.commit()
+
+
+async def test_patch_room_with_nonexistent_facility_returns_400(ac: AsyncClient, db: DBManager):
+    room_id = None
+    try:
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room for patch 400 test",
+                "description": "desc",
+                "price": 5000,
+                "quantity": 2,
+                "facilities_ids": [],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
+        response = await ac.patch(
+            f"/hotels/1/rooms/{room_id}",
+            json={
+                "facilities_ids": [99999],
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Facilities with ids [99999] do not exist"
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+            await db.commit()
+
+
+async def test_patch_room_with_nonexistent_facility_does_not_modify_room_or_facilities(ac: AsyncClient, db: DBManager):
+    facility = None
+    room_id = None
+    try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for patch immutability test")
+        )
+        await db.commit()
+
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Initial Room Title Before PATCH",
+                "description": "initial desc",
+                "price": 4000,
+                "quantity": 2,
+                "facilities_ids": [facility.id],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
+        response = await ac.patch(
+            f"/hotels/1/rooms/{room_id}",
+            json={
+                "title": "Attempted PATCH Title",
+                "facilities_ids": [99999],
+            },
+        )
+        assert response.status_code == 400
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        room_data = get_res.json()
+        assert room_data["title"] == "Initial Room Title Before PATCH"
+        assert [f["id"] for f in room_data["facilities"]] == [facility.id]
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
+        await db.commit()
+
+
+async def test_create_room_with_empty_facilities_succeeds(ac: AsyncClient, db: DBManager):
+    room_id = None
+    try:
+        response = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room with empty facilities list",
+                "description": "desc",
+                "price": 3000,
+                "quantity": 1,
+                "facilities_ids": [],
+            },
+        )
+        if response.status_code == 200:
+            room_id = response.json().get("data", {}).get("id")
+        assert response.status_code == 200
+        assert room_id is not None
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        assert get_res.json()["facilities"] == []
+    finally:
+        if room_id is not None:
+            await db.rooms.delete(id=room_id)
+            await db.commit()
+
+
+async def test_edit_room_with_existing_facilities_succeeds(ac: AsyncClient, db: DBManager):
+    facility = None
+    room_id = None
+    try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for PUT success")
+        )
+        await db.commit()
+
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room before PUT with facility",
+                "description": "desc before",
+                "price": 4500,
+                "quantity": 2,
+                "facilities_ids": [],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
+        put_res = await ac.put(
+            f"/hotels/1/rooms/{room_id}",
+            json={
+                "title": "Room after PUT with facility",
+                "description": "desc after",
+                "price": 5500,
+                "quantity": 2,
+                "facilities_ids": [facility.id],
+            },
+        )
+        assert put_res.status_code == 200
+        assert put_res.json() == {"status": "ok"}
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        room_data = get_res.json()
+        assert room_data["title"] == "Room after PUT with facility"
+        assert room_data["price"] == 5500
+        fac_ids = [f["id"] for f in room_data["facilities"]]
+        assert facility.id in fac_ids
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
+        await db.commit()
+
+
+async def test_patch_room_with_existing_facilities_succeeds(ac: AsyncClient, db: DBManager):
+    facility = None
+    room_id = None
+    try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for PATCH success")
+        )
+        await db.commit()
+
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room untouched title for PATCH",
+                "description": "original description",
+                "price": 7000,
+                "quantity": 3,
+                "facilities_ids": [],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
+        patch_res = await ac.patch(
+            f"/hotels/1/rooms/{room_id}",
+            json={
+                "facilities_ids": [facility.id],
+            },
+        )
+        assert patch_res.status_code == 200
+        assert patch_res.json() == {"status": "ok"}
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        room_data = get_res.json()
+        assert room_data["title"] == "Room untouched title for PATCH"
+        assert room_data["description"] == "original description"
+        assert room_data["price"] == 7000
+        assert room_data["quantity"] == 3
+        fac_ids = [f["id"] for f in room_data["facilities"]]
+        assert facility.id in fac_ids
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
+        await db.commit()
+
+
+async def test_create_room_with_duplicate_facilities_ids_succeeds(ac: AsyncClient, db: DBManager):
+    facility = None
+    room_id = None
+    try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for duplicate test")
+        )
+        await db.commit()
+
+        response = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room with duplicate facilities ids",
+                "description": "desc",
+                "price": 5000,
+                "quantity": 2,
+                "facilities_ids": [facility.id, facility.id],
+            },
+        )
+        if response.status_code == 200:
+            room_id = response.json().get("data", {}).get("id")
+        assert response.status_code == 200
+        assert room_id is not None
+
+        get_res = await ac.get(f"/hotels/1/rooms/{room_id}")
+        assert get_res.status_code == 200
+        room_data = get_res.json()
+        fac_ids = [f["id"] for f in room_data["facilities"]]
+        assert fac_ids == [facility.id]
+    finally:
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
+        await db.commit()

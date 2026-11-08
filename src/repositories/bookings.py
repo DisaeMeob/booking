@@ -107,3 +107,8 @@ class BookingsRepository(BaseRepository):
         res = await self.session.execute(stmt)
         deleted_id = res.scalar_one_or_none()
         return deleted_id is not None
+
+    async def has_bookings_for_room(self, room_id: int) -> bool:
+        query = select(select(self.model.id).filter_by(room_id=room_id).exists())
+        res = await self.session.execute(query)
+        return bool(res.scalar())
