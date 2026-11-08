@@ -1,8 +1,8 @@
 from datetime import date
 
-from fastapi import Query, HTTPException, APIRouter, Body, status
-from pathlib import Path
+from fastapi import Query, HTTPException, APIRouter, Body, status, Path
 from fastapi_cache.decorator import cache
+from sqlalchemy.exc import IntegrityError
 
 from src.schemas.hotels import HotelPATCH, HotelAdd
 from src.api.dependencies import PaginationDep, DBDep
@@ -60,8 +60,30 @@ async def get_hotel(hotel_id: int, db: DBDep):
 
 @router.delete('/{hotel_id}', summary="Удаление отеля")
 async def delete_hotels(db: DBDep, hotel_id: int = Path()):
-    await db.hotels.delete(id=hotel_id)
-    await db.commit()
+    hotel = await db.hotels.get_one_or_none(id=hotel_id, with_for_update=True)
+    if hotel is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hotel not found",
+        )
+
+    if await db.rooms.has_rooms_for_hotel(hotel_id=hotel_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete hotel with existing rooms",
+        )
+
+    try:
+        await db.hotels.delete(id=hotel_id)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.session.rollback()
+        if "rooms_hotel_id_fkey" in str(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete hotel with existing rooms",
+            )
+        raise exc
 
     return {'status': 'ok'}
 

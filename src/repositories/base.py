@@ -23,8 +23,10 @@ class BaseRepository:
     async def get_all(self, *args, **kwargs):
        return await self.get_filtered()
 
-    async def get_one_or_none(self, **filter_by):
+    async def get_one_or_none(self, with_for_update: bool = False, **filter_by):
         query = select(self.model).filter_by(**filter_by)
+        if with_for_update:
+            query = query.with_for_update()
         result = await self.session.execute(query)
         model = result.scalars().one_or_none()
 

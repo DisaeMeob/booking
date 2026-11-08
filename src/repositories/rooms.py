@@ -40,3 +40,8 @@ class RoomsRepository(BaseRepository):
             return None
 
         return RoomDataWithRelMapper.map_to_domain_entity(model)
+
+    async def has_rooms_for_hotel(self, hotel_id: int) -> bool:
+        query = select(select(self.model.id).filter_by(hotel_id=hotel_id).exists())
+        res = await self.session.execute(query)
+        return bool(res.scalar())
