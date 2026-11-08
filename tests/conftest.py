@@ -11,11 +11,19 @@ from src.database import Base, engine_null_pool
 from src.main import app
 from src.models import *
 from utils.db_manager import DBManager
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
+from src.init import custom_key_builder
 
 
 @pytest.fixture(scope="session", autouse=True)
 async def setup_database():
     assert settings.MODE == "TEST"
+    FastAPICache.init(
+        InMemoryBackend(),
+        prefix="test-cache",
+        key_builder=custom_key_builder,
+    )
 
 
 async def get_db_null_pool():

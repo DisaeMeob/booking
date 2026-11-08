@@ -8,7 +8,10 @@ import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
-from src.init import redis_manager
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+
+from src.init import redis_manager, custom_key_builder
 from src.middleware import middleware_logger
 from src.api.hotels import router as router_hotels
 from src.api.auth import router as auth_router
@@ -22,6 +25,11 @@ from src.api.images import router as images_router
 async def lifespan(app: FastAPI):
     # При старте приложении
     await redis_manager.connect()
+    FastAPICache.init(
+        RedisBackend(redis_manager.redis),
+        prefix="fastapi-cache",
+        key_builder=custom_key_builder,
+    )
     print(1)
     yield
     # При выключении приложения
