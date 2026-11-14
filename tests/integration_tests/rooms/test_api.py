@@ -598,25 +598,29 @@ async def test_delete_room_with_bookings_returns_409(ac: AsyncClient, db: DBMana
 
 
 async def test_delete_room_with_facilities_succeeds(ac: AsyncClient, db: DBManager):
-    facility = await db.facilities.add(
-        FacilityAdd(title="Facility for room deletion test")
-    )
-    await db.commit()
-
-    create_res = await ac.post(
-        "/hotels/1/rooms",
-        json={
-            "title": "Room with facility for delete test",
-            "description": "desc",
-            "price": 6000,
-            "quantity": 1,
-            "facilities_ids": [facility.id],
-        },
-    )
-    assert create_res.status_code == 200
-    room_id = create_res.json()["data"]["id"]
-
+    facility = None
+    room_id = None
     try:
+        facility = await db.facilities.add(
+            FacilityAdd(title="Facility for room deletion test")
+        )
+        await db.commit()
+
+        create_res = await ac.post(
+            "/hotels/1/rooms",
+            json={
+                "title": "Room with facility for delete test",
+                "description": "desc",
+                "price": 6000,
+                "quantity": 1,
+                "facilities_ids": [facility.id],
+            },
+        )
+        if create_res.status_code == 200:
+            room_id = create_res.json().get("data", {}).get("id")
+        assert create_res.status_code == 200
+        assert room_id is not None
+
         del_res = await ac.delete(f"/hotels/1/rooms/{room_id}")
         assert del_res.status_code == 200
         assert del_res.json() == {"status": "ok"}
@@ -629,7 +633,11 @@ async def test_delete_room_with_facilities_succeeds(ac: AsyncClient, db: DBManag
         fac_in_db = await db.facilities.get_one_or_none(id=facility.id)
         assert fac_in_db is not None
     finally:
-        await db.facilities.delete(id=facility.id)
+        if room_id is not None:
+            await db.room_facility.delete(room_id=room_id)
+            await db.rooms.delete(id=room_id)
+        if facility is not None:
+            await db.facilities.delete(id=facility.id)
         await db.commit()
 
 

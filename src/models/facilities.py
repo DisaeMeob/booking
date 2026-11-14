@@ -5,9 +5,12 @@ from src.database import Base
 
 class FacilitiesOrm(Base):
     __tablename__ = "facilities"
+    __table_args__ = (
+        UniqueConstraint("title", name="uq_facilities_title"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    title: Mapped[str] = mapped_column(String(100), unique=True)
+    title: Mapped[str] = mapped_column(String(100))
 
     rooms: Mapped[list["RoomsOrm"]] = relationship(
         back_populates="facilities",

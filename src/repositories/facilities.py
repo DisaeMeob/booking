@@ -2,25 +2,35 @@ from sqlalchemy import select, delete, insert
 
 from src.models.facilities import FacilitiesOrm, RoomsFacilitiesOrm
 from src.repositories.base import BaseRepository
-from src.repositories.mappers.mappers import FacilitiesDataMapper
-from src.schemas.facilities import RoomFacility
+from src.repositories.mappers.mappers import FacilitiesDataMapper, RoomFacilityDataMapper
 
 
 class FacilitiesRepository(BaseRepository):
     model = FacilitiesOrm
     mapper = FacilitiesDataMapper
 
-    async def get_by_ids(self, ids: list[int]) -> list[int]:
+    async def get_by_ids(
+        self, ids: list[int], with_for_update: bool = False
+    ) -> list[int]:
         if not ids:
             return []
         query = select(self.model.id).filter(self.model.id.in_(ids))
+        if with_for_update:
+            query = query.order_by(self.model.id).with_for_update()
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
 
 class RoomsFacilitiesRepository(BaseRepository):
     model = RoomsFacilitiesOrm
-    schema = RoomFacility
+    mapper = RoomFacilityDataMapper
+
+    async def has_rooms_for_facility(self, facility_id: int) -> bool:
+        query = select(
+            select(self.model.id).filter_by(facility_id=facility_id).exists()
+        )
+        res = await self.session.execute(query)
+        return bool(res.scalar())
 
     async def set_room_facilities(self, room_id, facilities_ids: list[int]):
         get_current_facilities_ids = (
