@@ -23,7 +23,7 @@ async def get_rooms(
 async def _validate_facilities_ids(db: DBDep, facilities_ids: list[int]) -> None:
     if not facilities_ids:
         return
-    existing_ids = await db.facilities.get_by_ids(facilities_ids)
+    existing_ids = await db.facilities.get_by_ids(facilities_ids, with_for_update=True)
     missing_ids = sorted(list(set(facilities_ids) - set(existing_ids)))
     if missing_ids:
         raise HTTPException(
@@ -167,21 +167,22 @@ async def patch_rooms(
             detail="Количество номеров (quantity) не может быть null",
         )
 
-    if "facilities_ids" in _raw_fields_dict:
-        await _validate_facilities_ids(db, _raw_fields_dict["facilities_ids"])
-
     quantity_is_present = "quantity" in _raw_fields_dict
+    facilities_is_present = "facilities_ids" in _raw_fields_dict
 
     room = await db.rooms.get_one_or_none(
         hotel_id=hotel_id,
         id=room_id,
-        with_for_update=quantity_is_present,
+        with_for_update=quantity_is_present or facilities_is_present,
     )
     if room is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found"
         )
+
+    if facilities_is_present:
+        await _validate_facilities_ids(db, _raw_fields_dict["facilities_ids"])
 
     if quantity_is_present and _raw_fields_dict["quantity"] < room.quantity:
         new_quantity = _raw_fields_dict["quantity"]
