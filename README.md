@@ -1,4 +1,4 @@
-# Hotel Booking Backend API (`ai_booking`)
+# Hotel Booking Backend API (`booking`)
 
 An asynchronous REST API backend for a hotel booking system built with **Python 3.13**, **FastAPI**, **SQLAlchemy 2.0 (`asyncpg`)**, **PostgreSQL**, **Pydantic v2**, **Redis**, and **Celery**.
 
@@ -182,8 +182,8 @@ Interactive OpenAPI documentation is served at `/docs` (Swagger UI) and `/redoc`
 ### 2. Install Dependencies
 
 ```bash
-git clone https://github.com/DisaeMeob/ai_booking.git
-cd ai_booking
+git clone https://github.com/DisaeMeob/booking.git
+cd booking
 
 python3.13 -m venv .venv
 source .venv/bin/activate
