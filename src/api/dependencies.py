@@ -25,8 +25,11 @@ def get_token(request: Request) -> str:
 
 def get_current_user_id(token: str = Depends(get_token)) -> int:
     data = AuthService().decode_jwt_token(token)
+    user_id = data.get("user_id")
+    if type(user_id) is not int or user_id <= 0:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный токен")
 
-    return data["user_id"]
+    return user_id
 
 
 UserIdDep = Annotated[int, Depends(get_current_user_id)]

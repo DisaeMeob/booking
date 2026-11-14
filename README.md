@@ -2,7 +2,7 @@
 
 An asynchronous REST API backend for a hotel booking system built with **Python 3.13**, **FastAPI**, **SQLAlchemy 2.0 (`asyncpg`)**, **PostgreSQL**, **Pydantic v2**, **Redis**, and **Celery**.
 
-Developed as a backend engineering project focused on clean layered architecture, transactional integrity, and concurrency control in PostgreSQL. The API exposes **27 endpoints**, and the automated test suite includes **104 passing tests** as of the latest verification.
+Developed as a backend engineering project focused on clean layered architecture, transactional integrity, and concurrency control in PostgreSQL. The API exposes **27 endpoints**, and the automated test suite includes **137 passing tests** as of the latest verification.
 
 ---
 
@@ -22,7 +22,7 @@ Developed as a backend engineering project focused on clean layered architecture
 - **Background Processing with Celery & Celery Beat**
   - Image uploads (`POST /images`) trigger an asynchronous Celery task ([`resize_image`](src/tasks/tasks.py)) that generates `1000px`, `500px`, and `200px` wide images using Pillow (`LANCZOS`).
   - A scheduled Celery Beat job (`booking_today_checkin`, configured via `crontab(hour=8)`) runs daily to query bookings with today's check-in date using an isolated `NullPool` database session.
-- **104 Automated Tests (Unit & Integration)**
+- **137 Automated Tests (Unit & Integration)**
   - Covers key CRUD workflows, boundary validation, date-overlap edge cases, and multi-transaction concurrency scenarios verified directly against PostgreSQL's `pg_stat_activity` and `pg_blocking_pids()`.
 
 ---
@@ -30,8 +30,8 @@ Developed as a backend engineering project focused on clean layered architecture
 ## Implemented Features
 
 - **Authentication & Users (`/auth`)**
-  - User registration with `bcrypt` password hashing (`passlib`) and duplicate email handling (`409 Conflict`).
-  - Login endpoint issuing a signed JWT (`PyJWT`) stored in the `access_token` HTTP cookie.
+  - User registration with `bcrypt` password hashing (`passlib`), UTF-8 72-byte password validation, and duplicate email handling (`409 Conflict`).
+  - Login endpoint (`POST /auth/login`) issuing a signed JWT (`PyJWT`) delivered **exclusively** via the `HttpOnly` cookie `access_token` (`SameSite=Lax`, `Path=/`, `Max-Age` synced with token expiration; `Secure` enabled in `PROD`). The JSON response returns `{"ok": true}` and never exposes the JWT in the response body.
   - Current user profile lookup (`GET /auth/me`) and cookie logout (`DELETE /auth/logout`).
 - **Hotels (`/hotels`)**
   - Search hotels that have available rooms for a requested date range (`date_from`, `date_to`), with optional case-insensitive substring filters (`title`, `location`) and pagination (`page`, `per_page`).
@@ -110,10 +110,10 @@ The PostgreSQL schema is managed with Alembic migrations (`src/migrations/versio
 ### Auth (`/auth` — 4 endpoints)
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/auth/register` | No | Register a new user (`200 OK`, `409 Conflict` if email exists) |
-| `POST` | `/auth/login` | No | Authenticate user and set `access_token` cookie (`200 OK`, `401 Unauthorized`) |
+| `POST` | `/auth/register` | No | Register a new user (`200 OK`, `409 Conflict` if email exists, `422` on invalid password) |
+| `POST` | `/auth/login` | No | Authenticate user, set `HttpOnly` cookie `access_token`, and return `{"ok": true}` (`200 OK`, `401 Unauthorized`) |
 | `GET` | `/auth/me` | Cookie | Get current authenticated user profile (`200 OK`, `401 Unauthorized`) |
-| `DELETE` | `/auth/logout` | No | Delete `access_token` cookie (`200 OK`) |
+| `DELETE` | `/auth/logout` | No | Delete `access_token` cookie and return `{"ok": true}` (`200 OK`) |
 
 ### Hotels (`/hotels` — 6 endpoints)
 | Method | Path | Auth | Description |
@@ -241,7 +241,7 @@ celery --app=src.tasks.celery_app:celery_instance beat -l INFO
 The test suite (`tests/`) runs against a dedicated PostgreSQL test database (`MODE=TEST` in `.env-test`), uses `NullPool` sessions to avoid event-loop cross-talk, and initializes an in-memory cache backend in [`tests/conftest.py`](tests/conftest.py).
 
 ```bash
-# Run all 104 tests
+# Run all 137 tests
 .venv/bin/pytest -v
 
 # Run individual test suites

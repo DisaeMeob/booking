@@ -3,7 +3,8 @@ from sqlalchemy.exc import IntegrityError
 
 from src.api.dependencies import PaginationDep, DBDep
 from src.api.dependencies import UserIdDep
-from src.schemas.users import UserAdd, UserRequestAdd
+from src.config import settings
+from src.schemas.users import User, UserAdd, UserRequestAdd, UserRequestLogin
 from src.services.auth import AuthService
 
 router = APIRouter(prefix='/auth', tags=['Авторизация и аутентификация'])
@@ -13,18 +14,24 @@ router = APIRouter(prefix='/auth', tags=['Авторизация и аутент
     '/login',
 )
 async def login_user(
-        data: UserRequestAdd,
+        data: UserRequestLogin,
         response: Response,
         db: DBDep
 ):
     user = await db.users.get_user_with_hashed_password(email=data.email)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Пользователь c таким email не зарегистрирован')
-    if not AuthService().verify_password(data.password, user.hashed_password):
+    if not user or not AuthService().verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Неправильный email или пароль')
     access_token = AuthService().create_access_token({"user_id": user.id})
-    response.set_cookie("access_token", access_token)
-    return {"access_token": access_token}
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        path="/",
+        samesite="lax",
+        secure=settings.MODE == "PROD",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    return {"ok": True}
 
 
 @router.post(
@@ -49,13 +56,19 @@ async def register_user(
 
 
 @router.get(
-    '/me'
+    '/me',
+    response_model=User,
 )
 async def get_me(
         user_id: UserIdDep,
         db: DBDep
 ):
     user = await db.users.get_one_or_none(id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Пользователь не найден",
+        )
 
     return user
 
@@ -65,6 +78,12 @@ async def get_me(
 async def logout(
     response: Response
 ):
-    response.delete_cookie("access_token")
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=settings.MODE == "PROD",
+    )
 
     return {"ok": True}
